@@ -47,148 +47,34 @@ static std::vector<fsw_event_type_filter> event_filters;
 static std::vector<fsw::monitor_filter> filters;
 static std::map<std::string, std::string> monitor_properties;
 
-static void print_event_path(const fsw::event& evt)
-{
-  std::cout << evt.get_path();
-}
-
-static void print_event_timestamp(const fsw::event& evt)
-{
-  const time_t& evt_time = evt.get_time();
-
-  char time_format_buffer[TIME_FORMAT_BUFF_SIZE];
-  struct tm *tm_time = localtime(&evt_time);
-
-  std::string date =
-    strftime(time_format_buffer,
-             TIME_FORMAT_BUFF_SIZE,
-             "%c",
-             tm_time) ? std::string(time_format_buffer) : std::string(
-      "<date format error>");
-
-  std::cout << date;
-}
-
-static void print_event_flags(const fsw::event& evt)
-{
-  const std::vector<fsw_event_flag>& flags = evt.get_flags();
-
-  for (size_t i = 0; i < flags.size(); ++i)
-  {
-    std::cout << flags[i];
-
-    if (i != flags.size() - 1) std::cout << " ";
-  }
-}
-
-static void print_end_of_event_record()
-{
-
-    std::cout << std::endl;
-}
-
-struct printf_event_callbacks
-{
-  void (*format_f)(const fsw::event& evt);
-  void (*format_p)(const fsw::event& evt);
-  void (*format_t)(const fsw::event& evt);
-};
-
-struct printf_event_callbacks event_format_callbacks
-{
-    print_event_flags,
-    print_event_path,
-    print_event_timestamp
-};
-
-static int printf_event(const std::string& fmt,
-                        const fsw::event& evt,
-                        const struct printf_event_callbacks& callback,
-                        std::ostream& os = std::cout)
-{
-  /*
-   * %t - time (further formatted using -f and strftime.
-   * %p - event path
-   * %f - event flags (event separator will be formatted with a separate option)
-   */
-  std::string format = "%p";
-  for (size_t i = 0; i < format.length(); ++i)
-  {
-    // If the character does not start a format directive, copy it as it is.
-    if (format[i] != '%')
-    {
-      os << format[i];
-      continue;
-    }
-
-    // If this is the end of the string, dump an error.
-    if (i == format.length() - 1)
-    {
-      return -1;
-    }
-
-    // Advance to next format and check which directive it is.
-    const char c = format[++i];
-
-    switch (c)
-    {
-    case '%':
-      os << '%';
-      break;
-    case '0':
-      os << '\0';
-      break;
-    case 'n':
-      os << '\n';
-      break;
-    case 'f':
-      callback.format_f(evt);
-      break;
-    case 'p':
-      callback.format_p(evt);
-      break;
-    case 't':
-      callback.format_t(evt);
-      break;
-    default:
-      return -1;
-    }
-  }
-
-  return 0;
-}
-
-
-void process_events(const std::vector<fsw::event>& events, void *context)
-{
-    for (const fsw::event& evt : events)
-    {
-        // Not sure why fmt is unused, so I'll just put %p in there
-        printf_event("%p", evt, event_format_callbacks);
-
-        print_end_of_event_record();
+void process_events(const std::vector<fsw::event>& events, void *context) {
+    for (const fsw::event& evt : events){
+        debugLog("%s", evt.get_path().c_str());
     }
 
     // Signal main thread to reload the logfile
     ((Gource*)context)->reload_logfile = true;
 }
 
-static int watch_logfile(void *ptr)
-{
+static int watch_logfile(void *ptr) {
     paths.push_back("./");
     active_monitor = fsw::monitor_factory::create_monitor(
-      fsw_monitor_type::system_default_monitor_type,
-      paths,
-      process_events,
-      ptr);
+        fsw_monitor_type::system_default_monitor_type,
+        paths,
+        process_events,
+        ptr);
 
-    for (auto& filter : filters)
-    {
+    filters.push_back({"FETCH_HEAD", fsw_filter_type::filter_exclude});
+    filters.push_back({"ORIG_HEAD", fsw_filter_type::filter_exclude});
+    filters.push_back({"ORIG_HEAD.lock", fsw_filter_type::filter_exclude});
+
+    for (auto& filter : filters) {
         filter.case_sensitive = false;
         filter.extended = false;
     }
 
-    fsw_set_verbose(true);
+    // Set this to true for debugging
+    fsw_set_verbose(false);
 
     // Create the default platform monitor
     active_monitor->set_properties(monitor_properties);
