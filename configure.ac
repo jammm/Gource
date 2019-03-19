@@ -26,6 +26,13 @@ AS_IF([test "$with_x" != yes], [
     esac
 ], [])
 
+    case "$host_os" in
+    darwin*)
+        with_x="no"
+        LIBS="$LIBS -framework CoreServices"
+    ;;
+    esac
+
 #GL
 AX_CHECK_GL
 AX_CHECK_GLU
@@ -38,9 +45,10 @@ PKG_CHECK_MODULES([PCRE], [libpcre])
 PKG_CHECK_MODULES([GLEW], [glew])
 PKG_CHECK_MODULES([SDL2], [sdl2 SDL2_image]);
 PKG_CHECK_MODULES([PNG], [libpng >= 1.2])
+PKG_CHECK_MODULES([FSWATCH], [libfswatch])
 
-CPPFLAGS="${CPPFLAGS} ${FT2_CFLAGS} ${PCRE_CFLAGS} ${GLEW_CFLAGS} ${SDL2_CFLAGS} ${PNG_CFLAGS}"
-LIBS="${LIBS} ${FT2_LIBS} ${PCRE_LIBS} ${GLEW_LIBS} ${SDL2_LIBS} ${PNG_LIBS}"
+CPPFLAGS="${CPPFLAGS} ${FT2_CFLAGS} ${PCRE_CFLAGS} ${GLEW_CFLAGS} ${SDL2_CFLAGS} ${PNG_CFLAGS} ${FSWATCH_CFLAGS}"
+LIBS="${LIBS} ${FT2_LIBS} ${PCRE_LIBS} ${GLEW_LIBS} ${SDL2_LIBS} ${PNG_LIBS} ${FSWATCH_LIBS}"
 
 AC_CHECK_FUNCS([IMG_LoadPNG_RW], , AC_MSG_ERROR([SDL2_image with PNG support required. Please see INSTALL]))
 AC_CHECK_FUNCS([IMG_LoadJPG_RW], , AC_MSG_ERROR([SDL2_image with JPEG support required. Please see INSTALL]))

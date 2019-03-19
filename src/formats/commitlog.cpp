@@ -209,6 +209,7 @@ bool RCommitLog::findNextCommit(RCommit& commit, int attempts) {
 }
 
 void RCommitLog::bufferCommit(RCommit& commit) {
+    debugLog("Buffering commit at %ld\n", commit.timestamp);
     lastCommit = commit;
     buffered = true;
 }

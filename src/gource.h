@@ -188,6 +188,8 @@ class Gource : public SDLApp {
     QuadTree* dirNodeTree;
     QuadTree* userTree;
 
+    SDL_Thread* file_watch_thread;
+
     std::string message;
     float message_timer;
 
@@ -264,6 +266,7 @@ public:
     ~Gource();
 
     static void writeCustomLog(const std::string& logfile, const std::string& output_file);
+    bool reload_logfile;
 
     void setCameraMode(const std::string& mode);
     void setCameraMode(bool track_users);

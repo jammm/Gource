@@ -14,15 +14,198 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <iostream>
+#include <string>
+#include <vector>
+#include <libfswatch/c++/path_utils.hpp>
+#include <libfswatch/c++/event.hpp>
+#include <libfswatch/c++/monitor.hpp>
+#include <libfswatch/c++/monitor_factory.hpp>
+#include <libfswatch/c/error.h>
+#include <libfswatch/c/libfswatch.h>
+#include <libfswatch/c/libfswatch_log.h>
+#include <libfswatch/c++/libfswatch_exception.hpp>
 
 #include "gource.h"
 #include "core/png_writer.h"
+
 
 bool  gGourceDrawBackground  = true;
 bool  gGourceQuadTreeDebug   = false;
 int   gGourceMaxQuadTreeDepth = 6;
 
 int gGourceUserInnerLoops = 0;
+
+static fsw::monitor *active_monitor = nullptr;
+static const unsigned int TIME_FORMAT_BUFF_SIZE = 128;
+//libfswatch integration
+// paths
+static std::vector<std::string> paths;
+
+// This stuff isn't used - just needed to satisfy libfswatch
+static std::vector<fsw_event_type_filter> event_filters;
+static std::vector<fsw::monitor_filter> filters;
+static std::map<std::string, std::string> monitor_properties;
+
+static void print_event_path(const fsw::event& evt)
+{
+  std::cout << evt.get_path();
+}
+
+static void print_event_timestamp(const fsw::event& evt)
+{
+  const time_t& evt_time = evt.get_time();
+
+  char time_format_buffer[TIME_FORMAT_BUFF_SIZE];
+  struct tm *tm_time = localtime(&evt_time);
+
+  std::string date =
+    strftime(time_format_buffer,
+             TIME_FORMAT_BUFF_SIZE,
+             "%c",
+             tm_time) ? std::string(time_format_buffer) : std::string(
+      "<date format error>");
+
+  std::cout << date;
+}
+
+static void print_event_flags(const fsw::event& evt)
+{
+  const std::vector<fsw_event_flag>& flags = evt.get_flags();
+
+  for (size_t i = 0; i < flags.size(); ++i)
+  {
+    std::cout << flags[i];
+
+    if (i != flags.size() - 1) std::cout << " ";
+  }
+}
+
+static void print_end_of_event_record()
+{
+
+    std::cout << std::endl;
+}
+
+struct printf_event_callbacks
+{
+  void (*format_f)(const fsw::event& evt);
+  void (*format_p)(const fsw::event& evt);
+  void (*format_t)(const fsw::event& evt);
+};
+
+struct printf_event_callbacks event_format_callbacks
+{
+    print_event_flags,
+    print_event_path,
+    print_event_timestamp
+};
+
+static int printf_event(const std::string& fmt,
+                        const fsw::event& evt,
+                        const struct printf_event_callbacks& callback,
+                        std::ostream& os = std::cout)
+{
+  /*
+   * %t - time (further formatted using -f and strftime.
+   * %p - event path
+   * %f - event flags (event separator will be formatted with a separate option)
+   */
+  std::string format = "%p";
+  for (size_t i = 0; i < format.length(); ++i)
+  {
+    // If the character does not start a format directive, copy it as it is.
+    if (format[i] != '%')
+    {
+      os << format[i];
+      continue;
+    }
+
+    // If this is the end of the string, dump an error.
+    if (i == format.length() - 1)
+    {
+      return -1;
+    }
+
+    // Advance to next format and check which directive it is.
+    const char c = format[++i];
+
+    switch (c)
+    {
+    case '%':
+      os << '%';
+      break;
+    case '0':
+      os << '\0';
+      break;
+    case 'n':
+      os << '\n';
+      break;
+    case 'f':
+      callback.format_f(evt);
+      break;
+    case 'p':
+      callback.format_p(evt);
+      break;
+    case 't':
+      callback.format_t(evt);
+      break;
+    default:
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+
+void process_events(const std::vector<fsw::event>& events, void *context)
+{
+    for (const fsw::event& evt : events)
+    {
+        // Not sure why fmt is unused, so I'll just put %p in there
+        printf_event("%p", evt, event_format_callbacks);
+
+        print_end_of_event_record();
+    }
+
+    // Signal main thread to reload the logfile
+    ((Gource*)context)->reload_logfile = true;
+}
+
+static int watch_logfile(void *ptr)
+{
+    paths.push_back("./");
+    active_monitor = fsw::monitor_factory::create_monitor(
+      fsw_monitor_type::system_default_monitor_type,
+      paths,
+      process_events,
+      ptr);
+
+    for (auto& filter : filters)
+    {
+        filter.case_sensitive = false;
+        filter.extended = false;
+    }
+
+    fsw_set_verbose(true);
+
+    // Create the default platform monitor
+    active_monitor->set_properties(monitor_properties);
+    active_monitor->set_allow_overflow(false);
+    active_monitor->set_latency(1.0);
+    active_monitor->set_recursive(true);
+    active_monitor->set_directory_only(false);
+    active_monitor->set_event_type_filters(event_filters);
+    active_monitor->set_filters(filters);
+    active_monitor->set_follow_symlinks(true);
+    active_monitor->set_watch_access(false);
+
+    // Start the monitor
+    active_monitor->start();
+
+    return 0;
+}
 
 Gource::Gource(FrameExporter* exporter) {
 
@@ -140,9 +323,13 @@ Gource::Gource(FrameExporter* exporter) {
     frameskip = 0;
     framecount = 0;
 
+    file_watch_thread = 0;
+    reload_logfile = false;
+
     reset();
 
     logmill = new RLogMill(logfile);
+    debugLog("Loading log file at %s", logfile.c_str());
 
     if(exporter!=0) setFrameExporter(exporter, gGourceSettings.output_framerate);
 
@@ -783,6 +970,11 @@ void Gource::keyPress(SDL_KeyboardEvent *e) {
 
         if (e->keysym.sym == SDLK_s) {
             recolour=true;
+        }
+
+        // This is added for debugging purposes.
+        if (debug && e->keysym.sym == SDLK_x) {
+            this->seekTo(0.99);
         }
 
         if(key_tab) {
@@ -1548,6 +1740,7 @@ void Gource::logic(float t, float dt) {
         if(!logmill->isFinished()) return;
 
         commitlog = logmill->getLog();
+        debugLog("Loading log..");
 
         std::string error = logmill->getError();
 
@@ -1572,6 +1765,19 @@ void Gource::logic(float t, float dt) {
             seekTo(gGourceSettings.start_position);
         }
     }
+
+    //file watching logic
+    if (file_watch_thread == 0) {
+#if SDL_VERSION_ATLEAST(2,0,0)
+        file_watch_thread = SDL_CreateThread( watch_logfile, "watch_logfile", (void*)this );
+#else
+        file_watch_thread = SDL_CreateThread( watch_logfile, (void*)this );
+#endif
+        if (!file_watch_thread) {
+            throw SDLAppException("Couldn't create logfile watch thread!\n");
+        }
+    }
+
 
     file_key.logic(dt);
 
@@ -1704,11 +1910,11 @@ void Gource::logic(float t, float dt) {
 
     gGourceRemovedFiles.clear();
 
-
+    RCommit commit;
     //add commits up until the current time
     while(!commitqueue.empty()) {
 
-        RCommit commit = commitqueue.front();
+        commit = commitqueue.front();
 
         //auto skip ahead, unless stop_position_reached
         if(gGourceSettings.auto_skip_seconds>=0.0 && idle_time >= gGourceSettings.auto_skip_seconds && !stop_position_reached) {
@@ -1728,7 +1934,20 @@ void Gource::logic(float t, float dt) {
         lasttime = commit.timestamp;
         subseconds = 0.0;
 
+        debugLog("Current commit is at %ld", (long int)commit.timestamp);
+
         commitqueue.pop_front();
+    }
+
+    //watch logfile for changes and reload if necessary
+    //reload_logfile should only be written to by process_events
+    if(reload_logfile) {
+        debugLog("Reloading log.. from %ld", (long int)lasttime);
+        gGourceSettings.start_timestamp = lasttime;
+        delete logmill;
+        logmill = new RLogMill(logfile);
+        commitlog = logmill->getLog();
+        reload_logfile = false;
     }
 
     slider.resize();
